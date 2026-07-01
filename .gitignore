@@ -3,3 +3,4 @@ santander_profile/
 tmp/
 *.log
 __pycache__/
+.venv
