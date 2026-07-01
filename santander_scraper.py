@@ -44,9 +44,9 @@ class SantanderScraper:
         print("[INFO] Step 6: Polling browser DOM state for download form to render...")
         page.wait_for_selector("form#downloadTransaction, span.radioGroup", state="visible", timeout=15000)
 
-        # Step 7: Select 'Since last downloaded' radio choice
-        print("[INFO] Step 7: Configuring export boundaries to 'Since last downloaded' delta scope...")
-        radio_target = page.locator("span.radioGroup").get_by_text("Since last downloaded", exact=False)
+        # Step 7: Select 'Since last download' radio choice
+        print("[INFO] Step 7: Configuring export boundaries to 'Since last download' delta scope...")
+        radio_target = page.locator("span.radioGroup").get_by_text("Since last download", exact=False)
         radio_target.wait_for(state="visible", timeout=5000)
         radio_target.click()
 
