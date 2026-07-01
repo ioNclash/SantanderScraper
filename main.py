@@ -1,119 +1,107 @@
-# main.py
+#!/usr/bin/env python3
 import os
-import shutil
 import sys
-import time
-import random
-import pandas
-import argparse  # <-- Added for modular configuration flags
-from santander_scraper import SantanderScraper
-from notifier import HomeAssistantNotifier
-import config
-
-PROFILE_PATH = "./santander_profile"
+import argparse
+import shutil
+import config  # Assumes config.py exists with personal variables & paths
 
 def parse_arguments():
-    """Parses command-line flags to determine active operational modules."""
-    parser = argparse.ArgumentParser(
-        description="Santander Bank Scraping Pipeline Orchestrator"
-    )
-    parser.add_argument(
-        "--notify", 
-        action="store_true", 
-        help="Enable Home Assistant webhook status notifications"
-    )
-    parser.add_argument(
-        "--firefly", 
-        action="store_true", 
-        help="Enable automated file movement to the Firefly III import directory"
-    )
-    parser.add_argument(
-        "--no-jitter", 
-        action="store_true", 
-        help="Bypass the random anti-bot execution sleep window"
-    )
+    parser = argparse.ArgumentParser(description="Santander Automated Ingestion Orchestrator")
+    parser.add_argument("--firefly", action="store_true", help="Convert payload to CSV and deliver to Firefly III watch directory")
+    parser.add_argument("--no-jitter", action="store_true", help="Bypass random anti-bot startup delays")
+    parser.add_argument("--notify", action="store_true", help="Send pipeline execution status to Home Assistant")
     return parser.parse_args()
 
 def main():
-    args = parse_arguments()
     print("[ORCHESTRATOR] Initializing daily banking data ingest...")
-    
-    # Check if persistent cookies profile exists
-    if not os.path.exists(PROFILE_PATH) or not os.listdir(PROFILE_PATH):
-        print("\n" + "!"*60)
-        print("[CRITICAL] Santander browser session profile folder is missing or empty!")
-        print(f"Path evaluated: {os.path.abspath(PROFILE_PATH)}")
-        print("\nTo fix this problem, please run the profile capturer script first:")
-        print("    python3 santander_scraper.py")
-        print("\nLog completely into your account and complete any Multi-Factor Auth.")
-        print("Once the dashboard renders, close the browser window to save your profile.")
-        print("!"*60 + "\n")
-        sys.exit(1)
+    args = parse_arguments()
 
-    # --- RANDOM JITTER LAYER ---
-    if not args.no_jitter:
-        delay_seconds = random.randint(0, 3600)
-        delay_minutes = round(delay_seconds / 60, 1)
-        print(f"[ORCHESTRATOR] Anti-bot Jitter: Sleeping for {delay_minutes} minutes before initiating logon...")
-        time.sleep(delay_seconds)
-        print("[ORCHESTRATOR] Sleep complete. Commencing secure browser cycle.")
-    else:
+    # Optional jitter delay logic
+    if args.no-jitter:
         print("[ORCHESTRATOR] --no-jitter flag active. Commencing browser cycle immediately.")
-    
-    # Initialize Home Assistant only if explicitly requested via flag
+    else:
+        import random
+        import time
+        jitter = random.randint(1, 900)
+        print(f"[ORCHESTRATOR] Anti-bot jitter active. Sleeping execution loop for {jitter} seconds...")
+        time.sleep(jitter)
+
+    # Instantiate the notifier if requested
     notifier = None
     if args.notify:
-        print("[ORCHESTRATOR] Home Assistant module: ENABLED")
-        notifier = HomeAssistantNotifier(config.HA_WEBHOOK_URL)
-    else:
-        print("[ORCHESTRATOR] Home Assistant module: DISABLED (Skipping notifications)")
+        try:
+            from notifier import Notifier
+            notifier = Notifier()
+            print("[ORCHESTRATOR] Home Assistant notification module: ACTIVE")
+        except Exception as e:
+            print(f"[WARN] Failed to load notification subsystem: {str(e)}")
 
-    # Initialize scraper engine
-    scraper = SantanderScraper(
-        personal_id=config.SANTANDER_PERSONAL_ID, 
-        security_number=config.SANTANDER_SECURITY_NUMBER
-    )
-    
-    # Run the automated scraper headlessly
-    success, result = scraper.run(debug=False)
-    
-    if not success:
-        print(f"[ORCHESTRATOR] Scraper reported failure: {result}")
+    # Import and execute the scraper module
+    try:
+        from santander_scraper import SantanderScraper
+        
+        # Pulling credentials safely from local configuration module
+        scraper = SantanderScraper(
+            personal_id=config.SANTANDER_PERSONAL_ID,
+            security_number=config.SANTANDER_SECURITY_NUMBER,
+            output_dir=config.WORKSPACE_TMP_DIR
+        )
+        
+        # Run scraper headlessly 
+        success, raw_file_path = scraper.run(debug=False)
+        
+        if not success:
+            raise Exception(raw_file_path) # Pass up the scraper failure text
+            
+    except Exception as err:
+        error_msg = f"Browser orchestration routine encountered a critical crash: {str(err)}"
+        print(f"[ERROR] {error_msg}")
         if notifier:
-            notifier.send_status("failed", f"Santander scraping failed: {result}")
+            notifier.send_status("failed", error_msg)
         sys.exit(1)
 
-    raw_file_path = result
-    
-    # File handling module logic
+    # Handle the Firefly handoff with the HTML-to-CSV translation wrapper
     if args.firefly:
         print("[ORCHESTRATOR] Firefly III import module: ENABLED")
         try:
-            # Define our new Firefly-compatible CSV destination path
-            destination_path = os.path.join(config.FIREFLY_WATCH_DIR, "santander_daily.csv")
-            print(f"[ORCHESTRATOR] Converting Excel sheet to Firefly-native CSV layout at: {destination_path}")
-            
             import pandas as pd
-            # Read the raw .xls file and export it straight as a clean .csv
-            df = pd.read_excel(raw_file_path)
+            
+            destination_path = os.path.join(config.FIREFLY_WATCH_DIR, "santander_daily.csv")
+            print(f"[ORCHESTRATOR] Parsing Santander pseudo-Excel HTML layout from: {raw_file_path}")
+            
+            # Read the HTML tables hidden inside the bank's .xls sheet
+            tables = pd.read_html(raw_file_path)
+            df = tables[0]
+            
+            # Locate where the actual structural transaction headers sit ("Description", "Date", etc.)
+            header_idx = df[df.astype(str).apply(lambda x: x.str.contains('Description', case=False)).any(axis=1)].index[0]
+            
+            # Re-slice and reset the dataframe tracking grid on those true row values
+            df.columns = df.iloc[header_idx]
+            df = df.iloc[header_idx + 1:].copy()
+            
+            # Strip junk trailing spacing lines and completely null structural arrays
+            df = df.dropna(subset=['Date', 'Description'], how='all')
+            df = df.loc[:, df.columns.notna()]
+            df.columns = df.columns.str.strip()
+            
+            # Write a clean, comma-separated configuration dataset to the data-importer share link
             df.to_csv(destination_path, index=False)
+            print(f"[ORCHESTRATOR] Conversion complete! File delivered to: {destination_path}")
             
             if notifier:
                 notifier.send_status("success", "Santander file successfully scraped, converted to CSV, and delivered to Firefly III.")
             print("[ORCHESTRATOR] Pipeline completed successfully with Firefly ingestion.")
             
         except Exception as e:
-            error_msg = f"Failed to convert and transfer file to Firefly directory: {str(e)}"
+            error_msg = f"Failed to parse and transfer file to Firefly directory: {str(e)}"
             print(f"[ERROR] {error_msg}")
             if notifier:
                 notifier.send_status("failed", error_msg)
             sys.exit(1)
+            
     else:
-        print("[ORCHESTRATOR] Firefly III import module: DISABLED")
-        print(f"[ORCHESTRATOR] File left in local directory payload zone: {raw_file_path}")
-        if notifier:
-            notifier.send_status("success", f"Santander file successfully scraped locally to {raw_file_path}.")
-        print("[ORCHESTRATOR] Pipeline completed successfully (Local only execution).")
+        print(f"[ORCHESTRATOR] Processing finished. Standalone output retained at: {raw_file_path}")
 
 if __name__ == "__main__":
     main()
