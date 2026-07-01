@@ -2,8 +2,7 @@
 import os
 import sys
 import argparse
-import shutil
-import config  # Assumes config.py exists with personal variables & paths
+import config
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description="Santander Automated Ingestion Orchestrator")
@@ -16,7 +15,6 @@ def main():
     print("[ORCHESTRATOR] Initializing daily banking data ingest...")
     args = parse_arguments()
 
-    # Optional jitter delay logic
     if args.no_jitter:
         print("[ORCHESTRATOR] --no-jitter flag active. Commencing browser cycle immediately.")
     else:
@@ -26,7 +24,6 @@ def main():
         print(f"[ORCHESTRATOR] Anti-bot jitter active. Sleeping execution loop for {jitter} seconds...")
         time.sleep(jitter)
 
-    # Instantiate the notifier if requested
     notifier = None
     if args.notify:
         try:
@@ -36,22 +33,18 @@ def main():
         except Exception as e:
             print(f"[WARN] Failed to load notification subsystem: {str(e)}")
 
-    # Import and execute the scraper module
     try:
         from santander_scraper import SantanderScraper
         
-        # Pulling credentials safely from local configuration module
         scraper = SantanderScraper(
             personal_id=config.SANTANDER_PERSONAL_ID,
-            security_number=config.SANTANDER_SECURITY_NUMBER,
-            output_dir=config.WORKSPACE_TMP_DIR
+            security_number=config.SANTANDER_SECURITY_NUMBER
         )
         
-        # Run scraper headlessly 
         success, raw_file_path = scraper.run(debug=False)
         
         if not success:
-            raise Exception(raw_file_path) # Pass up the scraper failure text
+            raise Exception(raw_file_path)
             
     except Exception as err:
         error_msg = f"Browser orchestration routine encountered a critical crash: {str(err)}"
@@ -60,7 +53,6 @@ def main():
             notifier.send_status("failed", error_msg)
         sys.exit(1)
 
-    # Handle the Firefly handoff with the HTML-to-CSV translation wrapper
     if args.firefly:
         print("[ORCHESTRATOR] Firefly III import module: ENABLED")
         try:
@@ -69,23 +61,18 @@ def main():
             destination_path = os.path.join(config.FIREFLY_WATCH_DIR, "santander_daily.csv")
             print(f"[ORCHESTRATOR] Parsing Santander pseudo-Excel HTML layout from: {raw_file_path}")
             
-            # Read the HTML tables hidden inside the bank's .xls sheet
             tables = pd.read_html(raw_file_path)
             df = tables[0]
             
-            # Locate where the actual structural transaction headers sit ("Description", "Date", etc.)
             header_idx = df[df.astype(str).apply(lambda x: x.str.contains('Description', case=False)).any(axis=1)].index[0]
             
-            # Re-slice and reset the dataframe tracking grid on those true row values
             df.columns = df.iloc[header_idx]
             df = df.iloc[header_idx + 1:].copy()
             
-            # Strip junk trailing spacing lines and completely null structural arrays
             df = df.dropna(subset=['Date', 'Description'], how='all')
             df = df.loc[:, df.columns.notna()]
             df.columns = df.columns.str.strip()
             
-            # Write a clean, comma-separated configuration dataset to the data-importer share link
             df.to_csv(destination_path, index=False)
             print(f"[ORCHESTRATOR] Conversion complete! File delivered to: {destination_path}")
             
