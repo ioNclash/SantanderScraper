@@ -88,16 +88,21 @@ def main():
     if args.firefly:
         print("[ORCHESTRATOR] Firefly III import module: ENABLED")
         try:
-            destination_path = os.path.join(config.FIREFLY_WATCH_DIR, "santander_daily.xls")
-            print(f"[ORCHESTRATOR] Shifting payload to Firefly landing strip: {destination_path}")
-            shutil.move(raw_file_path, destination_path)
+            # Define our new Firefly-compatible CSV destination path
+            destination_path = os.path.join(config.FIREFLY_WATCH_DIR, "santander_daily.csv")
+            print(f"[ORCHESTRATOR] Converting Excel sheet to Firefly-native CSV layout at: {destination_path}")
+            
+            import pandas as pd
+            # Read the raw .xls file and export it straight as a clean .csv
+            df = pd.read_excel(raw_file_path)
+            df.to_csv(destination_path, index=False)
             
             if notifier:
-                notifier.send_status("success", "Santander file successfully scraped and delivered to Firefly III.")
+                notifier.send_status("success", "Santander file successfully scraped, converted to CSV, and delivered to Firefly III.")
             print("[ORCHESTRATOR] Pipeline completed successfully with Firefly ingestion.")
             
         except Exception as e:
-            error_msg = f"Failed to transfer file to Firefly directory: {str(e)}"
+            error_msg = f"Failed to convert and transfer file to Firefly directory: {str(e)}"
             print(f"[ERROR] {error_msg}")
             if notifier:
                 notifier.send_status("failed", error_msg)
