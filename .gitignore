@@ -1,0 +1,5 @@
+config.py
+santander_profile/
+tmp/
+*.log
+__pycache__/
