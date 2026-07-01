@@ -4,6 +4,7 @@ import shutil
 import sys
 import time
 import random
+import pandas
 import argparse  # <-- Added for modular configuration flags
 from santander_scraper import SantanderScraper
 from notifier import HomeAssistantNotifier
