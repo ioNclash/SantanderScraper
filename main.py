@@ -17,7 +17,7 @@ def main():
     args = parse_arguments()
 
     # Optional jitter delay logic
-    if args.no-jitter:
+    if args.no_jitter:
         print("[ORCHESTRATOR] --no-jitter flag active. Commencing browser cycle immediately.")
     else:
         import random
